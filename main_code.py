@@ -1,6 +1,7 @@
 from PIL import Image, ImageDraw
 from paddleocr import PaddleOCR, draw_ocr
 import numpy as np
+
 import cv2
 from util import resize_image,resize_mask,enlarge_box_bigger,image_crop,resize_mask_returnbox_suokuan,resize_image_boxes
 from http import HTTPStatus
@@ -26,9 +27,15 @@ from modelscope.utils.constant import Tasks
 from util import save_images
 import argparse
 
-from catu import Alicatu
+from ppocr_pipline_alibabacatu import Alicatu
 
+from cv_inpainting import InpaintImage
 
+# compatibility fix for numpy
+if not hasattr(np, "int"):
+    np.int = int
+
+import torch
 
 params = {
     "show_debug": True,
