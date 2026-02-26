@@ -125,7 +125,7 @@ def create_mask(pil_image, box_coordinates):
 def PPOCR_pipline(img_path):
     pil_image = cv2.imread(img_path)
     result=ocr.ocr(img_path)
-    result=result[0]    
+    
     dt_boxes = [line[0] for line in result]
 
     pil_image,new_dt_boxes= resize_image_boxes(pil_image,dt_boxes, max_length=768)
@@ -153,9 +153,9 @@ def PPOCR_pipline(img_path):
     ori_image_path=img_path
 
     translation_log=img_path[:-4]+"translation_log.txt"
-    log_file = open(translation_log, "w")
+    log_file = open(translation_log, "w", encoding="utf-8")
     evaluate_log=img_path[:-4]+"evaluate_log.txt"
-    evaluate_log_file = open(evaluate_log, "w")
+    evaluate_log_file = open(evaluate_log, "w", encoding="utf-8")
 
     for idx in range(len(new_dt_boxes)):
         boxes=new_dt_boxes[idx]
@@ -184,7 +184,7 @@ def PPOCR_pipline(img_path):
         cv2.imwrite(masked_image_path, masked_image)
         cv2.imwrite(resized_masked_image_path, resized_masked_image)
         if whether_erase==True and untranslate==False:
-            Alicatu(boxes,ori_image_path)
+            InpaintImage(ori_image_path, boxes)
             erased_image_path=ori_image_path[:-4]+'_erase.png'
             ori_image_path=erased_image_path
         txts=all_txts[idx] 
@@ -243,7 +243,7 @@ def PPOCR_pipline(img_path):
                 if crop_result[0]==None:
                     crop_text_write='failed'
                 else:
-                    crop_text= [line[1][0] for line in crop_result[0]]
+                    crop_text= [line[1][0] for line in crop_result]
                     crop_text_write=' '.join(crop_text)
 
                 Anytext_editing_count=0
@@ -268,7 +268,7 @@ def PPOCR_pipline(img_path):
                     if crop_result[0]==None:
                         crop_text_write='failed'
                     else:
-                        crop_text= [line[1][0] for line in crop_result[0]]
+                        crop_text= [line[1][0] for line in crop_result]
                         crop_text_write=' '.join(crop_text)
                     if Anytext_editing_count==5 or response==crop_text_write:
                         inpainted_image_path=img_path[:-4]+'_inpainted.png'
@@ -280,20 +280,20 @@ def PPOCR_pipline(img_path):
                 evaluate_log_file.write(crop_text_write+'\n')
                 
 
-            else:#
+            else:
                 inpainted_image_path=img_path[:-4]+'_inpainted.png'
                 cv2.imwrite(inpainted_image_path, image)
-                inpainted_image=image#
-        ori_image_path=inpainted_image_path #  
-        image=inpainted_image.clip(1, 255) # 
+                inpainted_image=image
+        ori_image_path=inpainted_image_path
+        image=inpainted_image.clip(1, 255)
 
 
 
 if __name__ == '__main__':
     folder_path=''
     image_path_list=[]
-    ocr = PaddleOCR(lang="ch") # 
-    evaluate_ocr = PaddleOCR(lang="en") #
+    ocr = PaddleOCR(lang="ch")
+    evaluate_ocr = PaddleOCR(lang="en")
     for filename in os.listdir(folder_path):
       
         if filename.endswith('.png') or filename.endswith('.jpg'):
