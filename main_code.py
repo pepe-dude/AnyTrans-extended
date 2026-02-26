@@ -44,21 +44,21 @@ params = {
 }
 pipe = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.2')
 
-# 加载模型
 def call_with_prompt_llm_all(input_text):
+    dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
     dashscope.api_key =''
     output_text = ''.join([f'<box{i+1}>{text}</box{i+1}>' for i, text in enumerate(input_text)])
     prompt_template='Translate the following phrase from Chinese into English.\nChinese: <box1>白虎</box1>\nEnglish: <box1>white tiger</box1>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>生日</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>Birthday</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>新年</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>New Year</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>@交通北京</box1><box2>神驼2号</box2><box3>北京养护集团</box3>\nEnglish: <box1>@Traffic Beijing</box1><box2>Giant Camel 2</box2><box3>Beijng Maintenance Group</box3>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>青草依依</box1><box2>请您爱惜</box2>\nEnglish: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>门</box1><box2>橡札所</box2><box3>票口</box3><box4>禁止携犬入内</box4><box5>严禁烟火</box5><box6>比我高</box6><box7>买票</box7>\nEnglish: <box1>Gate</box1><box2>Stamp Office</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Fireworks</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\n\nTranslate the following sentence from Chinese into English, keep the length similar and no more than 20 letters.\n'+output_text+'\nEnglish '
     response = dashscope.Generation.call(
-        'qwen1.5-7b-chat',
+        model='qwen3-max',
         prompt=prompt_template,
-        result_format='string')
+        result_format='message')
     wrong_count=0
     while response.status_code != HTTPStatus.OK and wrong_count<=8:
         time.sleep(8)  
         wrong_count+=1    
     if response.status_code == HTTPStatus.OK:
-        result_txt=response.output['text']
+        result_txt=response.output.choices[0].message.content
         box_pattern = re.compile(r'<box\d+>(.*?)</box\d+>')
         matches = box_pattern.findall(result_txt)
         if len(input_text)==len(matches):
@@ -74,21 +74,21 @@ def call_with_prompt_llm_all(input_text):
         return False,result_txt
 
 
-# 加载模型
 def call_with_prompt_llm_all_boxbybox(input_text):
+    dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
     dashscope.api_key =''
     output_text='<box1>'+input_text+'</box1>'
     prompt_template='Translate the following phrase from Chinese into English.\nChinese: <box1>白虎</box1>\nEnglish: <box1>white tiger</box1>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>生日</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>Birthday</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>新年</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>New Year</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>@交通北京</box1><box2>神驼2号</box2><box3>北京养护集团</box3>\nEnglish: <box1>@Traffic Beijing</box1><box2>Giant Camel 2</box2><box3>Beijng Maintenance Group</box3>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>青草依依</box1><box2>请您爱惜</box2>\nEnglish: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>门</box1><box2>橡札所</box2><box3>票口</box3><box4>禁止携犬入内</box4><box5>严禁烟火</box5><box6>比我高</box6><box7>买票</box7>\nEnglish: <box1>Gate</box1><box2>Stamp Office</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Fireworks</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\n\nTranslate the following sentence from Chinese into English, keep the length similar and no more than 20 letters.\n'+output_text+'\nEnglish '
     response = dashscope.Generation.call(
-        'qwen1.5-7b-chat',
+        model='qwen3-max',
         prompt=prompt_template,
-        result_format='string')
+        result_format='message')
     wrong_count=0
     while response.status_code != HTTPStatus.OK and wrong_count<=8:
         time.sleep(8)  
         wrong_count+=1    
     if response.status_code == HTTPStatus.OK:
-        result_txt=response.output['text']
+        result_txt=response.output.choices[0].message.content
         box_pattern = re.compile(r'<box\d+>(.*?)</box\d+>')
         matches = box_pattern.findall(result_txt)
         if len(matches)==1:
@@ -99,13 +99,11 @@ def call_with_prompt_llm_all_boxbybox(input_text):
     else:
         time.sleep(5)  
         result_txt='failed'
-        return result_txt
-  
+        return result_txt  
 
 
 
 def translaor_using_piple(input_txt):
-    # trans_txt=translator(input_txt)[0]['translation_text']
     responses_all=[]
     for tmp_txt in input_txt:
         tmp_response=call_with_prompt_llm_all_boxbybox(tmp_txt)
