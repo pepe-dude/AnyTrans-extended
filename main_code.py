@@ -1,115 +1,151 @@
-from PIL import Image, ImageDraw
-from paddleocr import PaddleOCR, draw_ocr
 import numpy as np
 
-import cv2
 from util import resize_image,resize_mask,enlarge_box_bigger,image_crop,resize_mask_returnbox_suokuan,resize_image_boxes
-from http import HTTPStatus
-import dashscope
+from util import save_images
+
 import os
-from PIL import Image
-import io
-import json
 import re
-import requests
 import sys
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from transformers import pipeline as trans_pipeline
 import random
-import concurrent.futures
 import time
 
-from dashscope import MultiModalConversation
-
 from modelscope.pipelines import pipeline
-from modelscope.outputs import OutputKeys
-from modelscope.utils.constant import Tasks
-from util import save_images
-import argparse
-
+from paddleocr import PaddleOCR, draw_ocr
 from ppocr_pipline_alibabacatu import Alicatu
-
 from cv_inpainting import InpaintImage
+from http import HTTPStatus
+import argparse
+import cv2
+import dashscope
+import torch
+from openai import OpenAI, APIStatusError
+
+from typing import List
 
 # compatibility fix for numpy
 if not hasattr(np, "int"):
     np.int = int
 
-import torch
+MODEL = "deepseek-v3.2"
+BASE_URL = "https://llm.ai.e-infra.cz/v1/"
+
+# TODO: setup a dictionary with prompt templates for each language pair
+# TODO: Leave the end open so that the translated text can be inserted
+promptTemplates = {
+    "cs2en": 'Translate the following phrase from Czech into English.\Czech: <box1>Bílý tygr</box1>\nEnglish: <box1>white tiger</box1>\n\nTranslate the following sentence from Czech into English.\Czech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\nEnglish: <box1>Happy</box1><box2>Birthday</box2>\n\nTranslate the following sentence from Czech into English.\Czech: <box1>Šťastný</box1><box2>nový rok</box2>\nEnglish: <box1>Happy</box1><box2>New Year</box2>\n\nTranslate the following sentence from Czech into English.\Czech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\nEnglish: <box1>@Beijing Transportation</box1><box2>Shen Tuo No. 2</box2><box3>Beijng Maintenance Group</box3>\n\nTranslate the following sentence from Czech into English.\Czech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\nEnglish: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\n\nTranslate the following sentence from Czech into English.\Czech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\nEnglish: <box1>Gate</box1><box2>oak leaves</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Smoking</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\n\nTranslate the following sentence from Czech into English, keep the length similar and no more than 20 letters.',
+    "en2cs": 'Translate the following phrase from English into Czech.\English: <box1>white tiger</box1>\nCzech: <box1>Bílý tygr</box1>\n\nTranslate the following sentence from English into Czech.\English: <box1>Happy</box1><box2>Birthday</box2>\nCzech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\n\nTranslate the following sentence from English into Czech.\English: <box1>Happy</box1><box2>New Year</box2>\nCzech: <box1>Šťastný</box1><box2>nový rok</box2>\n\nTranslate the following sentence from English into Czech.\English: <box1>@Beijing Transportation</box1><box2>Shen Tuo No. 2</box2><box3>Beijng Maintenance Group</box3>\nCzech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\n\nTranslate the following sentence from English into Czech.\English: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\nCzech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\n\nTranslate the following sentence from English into Czech.\English: <box1>Gate</box1><box2>oak leaves</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Smoking</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\nCzech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\n\nTranslate the following sentence from English into Czech, keep the length similar and no more than 20 letters.',
+    
+    "cs2uk": 'Translate the following phrase from Czech into Ukranian.\Czech: <box1>Bílý tygr</box1>\nUkranian: <box1>Білий тигр</box1>\n\nTranslate the following sentence from Czech into Ukranian.\Czech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\nUkranian: <box1>З днем</box1><box2>народження</box2>\n\nTranslate the following sentence from Czech into Ukranian.\Czech: <box1>Šťastný</box1><box2>nový rok</box2>\nUkranian: <box1>З</box1><box2>Новим роком</box2>\n\nTranslate the following sentence from Czech into Ukranian.\Czech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\nUkranian: <box1>@Транспорт Пекін</box1><box2>Шеньтуо № 2</box2><box3>Пекінська група технічного обслуговування</box3>\n\nTranslate the following sentence from Czech into Ukranian.\Czech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\nUkranian: <box1>Будь ласка</box1><box2>оцініть пишну зелену траву</box2>\n\nTranslate the following sentence from Czech into Ukranian.\Czech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\nUkranian: <box1>Ворота</box1><box2>дубове листя</box2><box3>Каса</box3><box4>Вхід з собаками заборонено</box4><box5>Куріння заборонено</box5><box6>Вищий за мене</box6><box7>Купити квиток</box7>\n\nTranslate the following sentence from Czech into Ukranian, keep the length similar and no more than 20 letters.',
+    "uk2cs": 'Translate the following phrase from Ukranian into Czech.\\Ukranian: <box1>Білий тигр</box1>\nCzech: <box1>Bílý tygr</box1>\n\nTranslate the following sentence from Ukranian into Czech.\\Ukranian: <box1>З днем</box1><box2>народження</box2>\nCzech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\n\nTranslate the following sentence from Ukranian into Czech.\\Ukranian: <box1>З</box1><box2>Новим роком</box2>\nCzech: <box1>Šťastný</box1><box2>nový rok</box2>\n\nTranslate the following sentence from Ukranian into Czech.\\Ukranian: <box1>@Транспорт Пекін</box1><box2>Шеньтуо № 2</box2><box3>Пекінська група технічного обслуговування</box3>\nCzech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\n\nTranslate the following sentence from Ukranian into Czech.\\Ukranian: <box1>Будь ласка</box1><box2>оцініть пишну зелену траву</box2>\nCzech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\n\nTranslate the following sentence from Ukranian into Czech.\\Ukranian: <box1>Ворота</box1><box2>дубове листя</box2><box3>Каса</box3><box4>Вхід з собаками заборонено</box4><box5>Куріння заборонено</box5><box6>Вищий за мене</box6><box7>Купити квиток</box7>\nCzech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\n\nTranslate the following sentence from Ukranian into Czech, keep the length similar and no more than 20 letters.',
+
+    "cs2german": 'Translate the following phrase from Czech into German.\Czech: <box1>Bílý tygr</box1>\nGerman: <box1>Weißer Tiger</box1>\n\nTranslate the following sentence from Czech into German.\Czech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\nGerman: <box1>Alles Gute</box1><box2>zum Geburtstag</box2>\n\nTranslate the following sentence from Czech into German.\Czech: <box1>Šťastný</box1><box2>nový rok</box2>\nGerman: <box1>Frohes</box1><box2>Neues Jahr</box2>\n\nTranslate the following sentence from Czech into German.\Czech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\nGerman: <box1>@Pekinger Verkehr</box1><box2>Shentuo Nr. 2</box2><box3>Wartungsgruppe Peking</box3>\n\nTranslate the following sentence from Czech into German.\Czech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\nGerman: <box1>Bitte bewundern</box1><box2>Sie das saftige Grün des Grases</box2>\n\nTranslate the following sentence from Czech into German.\Czech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\nGerman: <box1>Eichenlaub</box1><box2>Tor</box2><box3>Kasse</box3><box4>Hunde nicht erlaubt</box4><box5>Rauchen verboten</box5><box6>Größer als ich</box6><box7>Kaufen Sie ein Ticket</box7>\n\nTranslate the following sentence from Czech into German, keep the length similar and no more than 20 letters.',
+    "german2cs": 'Translate the following phrase from German into Czech.\German: <box1>Weißer Tiger</box1>\nCzech: <box1>Bílý tygr</box1>\n\nTranslate the following sentence from German into Czech.\German: <box1>Alles Gute</box1><box2>zum Geburtstag</box2>\nCzech: <box1>Všechno nejlepší</box1><box2>k narozeninám</box2>\n\nTranslate the following sentence from German into Czech.\German: <box1>Frohes</box1><box2>Neues Jahr</box2>\nCzech: <box1>Šťastný</box1><box2>nový rok</box2>\n\nTranslate the following sentence from German into Czech.\German: <box1>@Pekinger Verkehr</box1><box2>Shentuo Nr. 2</box2><box3>Wartungsgruppe Peking</box3>\nCzech: <box1>@Doprava Peking</box1><box2>Shentuo č. 2</box2><box3>Pekingská skupina pro údržbu</box3>\n\nTranslate the following sentence from German into Czech.\German: <box1>Bitte bewundern</box1><box2>Sie das saftige Grün des Grases</box2>\nCzech: <box1>Prosím, važte si</box1><box2>svěží zelené trávy</box2>\n\nTranslate the following sentence from German into Czech.\German: <box1>Eichenlaub</box1><box2>Tor</box2><box3>Kasse</box3><box4>Hunde nicht erlaubt</box4><box5>Rauchen verboten</box5><box6>Größer als ich</box6><box7>Kaufen Sie ein Ticket</box7>\nCzech: <box1>Brána</box1><box2>Dubové listy</box2><box3>Pokladna</box3><box4>Vstup se psy zakázán</box4><box5>Zákaz kouření</box5><box6>Vyšší než já</box6><box7>Koupit lístek</box7>\n\nTranslate the following sentence from German into Czech, keep the length similar and no more than 20 letters.',
+}
+
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url=BASE_URL
+)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--sourceLang", default="cs", choices=["cs", "en", "uk", "german"])
+parser.add_argument("--targetLang", default="en", choices=["cs", "en", "uk", "german"])
 
 params = {
     "show_debug": True,
     "image_count": 1,
     "ddim_steps": 20,
 }
-pipe = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.2')
 
-def call_with_prompt_llm_all(input_text):
-    dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
-    dashscope.api_key =''
-    output_text = ''.join([f'<box{i+1}>{text}</box{i+1}>' for i, text in enumerate(input_text)])
-    prompt_template='Translate the following phrase from Chinese into English.\nChinese: <box1>白虎</box1>\nEnglish: <box1>white tiger</box1>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>生日</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>Birthday</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>新年</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>New Year</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>@交通北京</box1><box2>神驼2号</box2><box3>北京养护集团</box3>\nEnglish: <box1>@Traffic Beijing</box1><box2>Giant Camel 2</box2><box3>Beijng Maintenance Group</box3>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>青草依依</box1><box2>请您爱惜</box2>\nEnglish: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>门</box1><box2>橡札所</box2><box3>票口</box3><box4>禁止携犬入内</box4><box5>严禁烟火</box5><box6>比我高</box6><box7>买票</box7>\nEnglish: <box1>Gate</box1><box2>Stamp Office</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Fireworks</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\n\nTranslate the following sentence from Chinese into English, keep the length similar and no more than 20 letters.\n'+output_text+'\nEnglish '
-    response = dashscope.Generation.call(
-        model='qwen3-max',
-        prompt=prompt_template,
-        result_format='message')
-    wrong_count=0
-    while response.status_code != HTTPStatus.OK and wrong_count<=8:
-        time.sleep(8)  
-        wrong_count+=1    
-    if response.status_code == HTTPStatus.OK:
-        result_txt=response.output.choices[0].message.content
-        box_pattern = re.compile(r'<box\d+>(.*?)</box\d+>')
-        matches = box_pattern.findall(result_txt)
-        if len(input_text)==len(matches):
-            result_txt=matches
-            return True,result_txt
-        elif len(input_text)==1:
-            return True,[result_txt]
-        else:
-            return False,result_txt
-    else:
-        time.sleep(5)  
-        result_txt='failed'
-        return False,result_txt
+# pipe = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.2')
+# pipe = pipeline(
+#     'my-anytext-task',
+#     model='damo/cv_anytext_text_generation_editing',
+#     device='cpu',   # force CPU
+# )
 
 
-def call_with_prompt_llm_all_boxbybox(input_text):
-    dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
-    dashscope.api_key =''
-    output_text='<box1>'+input_text+'</box1>'
-    prompt_template='Translate the following phrase from Chinese into English.\nChinese: <box1>白虎</box1>\nEnglish: <box1>white tiger</box1>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>生日</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>Birthday</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>新年</box1><box2>快乐</box2>\nEnglish: <box1>Happy</box1><box2>New Year</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>@交通北京</box1><box2>神驼2号</box2><box3>北京养护集团</box3>\nEnglish: <box1>@Traffic Beijing</box1><box2>Giant Camel 2</box2><box3>Beijng Maintenance Group</box3>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>青草依依</box1><box2>请您爱惜</box2>\nEnglish: <box1>Grass is green and fresh</box1><box2>please cherish it</box2>\n\nTranslate the following sentence from Chinese into English.\nChinese: <box1>门</box1><box2>橡札所</box2><box3>票口</box3><box4>禁止携犬入内</box4><box5>严禁烟火</box5><box6>比我高</box6><box7>买票</box7>\nEnglish: <box1>Gate</box1><box2>Stamp Office</box2><box3>Ticket Counter</box3><box4>No Dogs Allowed</box4><box5>No Fireworks</box5><box6>Higher than me</box6><box7>Buy tickets</box7>\n\nTranslate the following sentence from Chinese into English, keep the length similar and no more than 20 letters.\n'+output_text+'\nEnglish '
-    response = dashscope.Generation.call(
-        model='qwen3-max',
-        prompt=prompt_template,
-        result_format='message')
-    wrong_count=0
-    while response.status_code != HTTPStatus.OK and wrong_count<=8:
-        time.sleep(8)  
-        wrong_count+=1    
-    if response.status_code == HTTPStatus.OK:
-        result_txt=response.output.choices[0].message.content
-        box_pattern = re.compile(r'<box\d+>(.*?)</box\d+>')
-        matches = box_pattern.findall(result_txt)
+def call_with_prompt_llm_all_boxbybox(inputText, trans_mode):
+    outputText='<box1>'+inputText+'</box1>'
+    promptTemplate = promptTemplates[trans_mode] + outputText
+    
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": promptTemplate,
+                },
+            ]
+        )
+        
+        resultTxt = response.choices[0].message.content
+        boxPattern = re.compile(r'<box\d+>(.*?)</box\d+>')
+
+        matches = boxPattern.findall(resultTxt)
         if len(matches)==1:
-            result_txt=matches[0]
-            return result_txt
+            resultTxt=matches[0]
+            return resultTxt
         else:
-            return result_txt
-    else:
-        time.sleep(5)  
-        result_txt='failed'
-        return result_txt  
+            return resultTxt
+        
+    except APIStatusError:
+        resultTxt='failed'
+        return resultTxt 
+    
+    except Exception:
+        resultTxt='failed'
+        return resultTxt
 
 
+def call_with_prompt_llm_all(inputText: List[str], trans_mode):
+    # craft the LLM prompt
+    outputText = ''.join([f'<box{i+1}>{text}</box{i+1}>' for i, text in enumerate(inputText)])
+    promptTemplate = promptTemplates[trans_mode] + outputText
+    
+    try:
+        # make the API call
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": promptTemplate,
+                },
+            ]
+        )
+        
+        resultTxt = response.choices[0].message.content
+        boxPattern = re.compile(r'<box\d+>(.*?)</box\d+>')
 
-def translaor_using_piple(input_txt):
+        # check for correct format
+        matches = boxPattern.findall(resultTxt)
+        if len(inputText)==len(matches):
+            resultTxt = matches
+            return True,resultTxt
+        elif len(inputText)==1:
+            return True,[resultTxt]
+        else:
+            return False, resultTxt
+        
+    except APIStatusError as e:
+        resultTxt='failed'
+        return resultTxt 
+    
+    except Exception as e:
+        resultTxt='failed'
+        return resultTxt
+    
+
+def translaor_using_piple(input_txt, sourceLang, targetLang):
+    # translate each text box individually and return the result
     responses_all=[]
     for tmp_txt in input_txt:
-        tmp_response=call_with_prompt_llm_all_boxbybox(tmp_txt)
+        tmp_response=call_with_prompt_llm_all_boxbybox(tmp_txt, sourceLang, targetLang)
         responses_all.append(tmp_response)
-    return True,responses_all 
 
+    return True,responses_all 
 
 
 def create_mask(pil_image, box_coordinates):
@@ -122,59 +158,76 @@ def create_mask(pil_image, box_coordinates):
     return mask
 
 
-def PPOCR_pipline(img_path):
+def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang):
+    trans_mode = f'{sourceLang}2{targetLang}'
+
+    # Text Detection & Recognition
     pil_image = cv2.imread(img_path)
     result=ocr.ocr(img_path)
     
     dt_boxes = [line[0] for line in result]
 
-    pil_image,new_dt_boxes= resize_image_boxes(pil_image,dt_boxes, max_length=768)
+    pil_image,new_dt_boxes= resize_image_boxes(pil_image,dt_boxes, max_length=768)    
     resize_image_path=img_path[:-4]+'_resize.jpg'
+
     cv2.imwrite(resize_image_path,pil_image )
     img_path=resize_image_path
+
     for i,tmp_box in enumerate(new_dt_boxes):
         new_dt_boxes[i]=enlarge_box_bigger(tmp_box)
+
     all_txts = [line[1][0] for line in result]
     all_text_ocr=all_txts
+
     if all_text_ocr==[]:
         return None
-    judge,translate_responses=call_with_prompt_llm_all(all_text_ocr)
+
+    # Translation of the detected text via API calls to an LLM
+    judge,translate_responses=call_with_prompt_llm_all(all_text_ocr, trans_mode)
+    
+    # If translation of all image boxes at once fails, attempt translation of the boxes one by one
     if judge==False:
-        judge,translate_responses=translaor_using_piple(all_text_ocr)
+        judge,translate_responses=translaor_using_piple(all_text_ocr, trans_mode)
+
+    # If both translation methods fail - write a log and return
     if judge==False:
         translation_log=img_path[:-4]+"_wrongtranslation_log.txt"
         log_file = open(translation_log, "w")
         log_file.write(str(all_text_ocr) + "\t")
         log_file.write(str(translate_responses) + "\t")        
         return None
-    trans_mode='ch2en'
+    
+
     image = np.array(pil_image)
-    image = image.clip(1, 255) 
-    ori_image_path=img_path
+    image = image.clip(0, 255) 
+    ori_image_path = img_path
 
     translation_log=img_path[:-4]+"translation_log.txt"
     log_file = open(translation_log, "w", encoding="utf-8")
-    evaluate_log=img_path[:-4]+"evaluate_log.txt"
+    evaluate_log = img_path[:-4]+"evaluate_log.txt"
     evaluate_log_file = open(evaluate_log, "w", encoding="utf-8")
 
     for idx in range(len(new_dt_boxes)):
-        boxes=new_dt_boxes[idx]
-        mask=create_mask(pil_image,boxes)
-        word_count_old=len(all_text_ocr[idx])
-        tmp_trans=all_txts[idx]
-        trans_mode='ch2en'
+        boxes = new_dt_boxes[idx]
+        mask = create_mask(pil_image,boxes)
+        char_count_old=len(all_text_ocr[idx])
+        tmp_trans = all_txts[idx]
         untranslate=False
-        tmp_pattern = re.compile('[a-zA-Z0-9]{1,}')
-        if re.search(tmp_pattern, tmp_trans):
+
+        letterPattern = re.compile(r'[^\W\d_]', re.UNICODE)
+        if re.search(letterPattern, tmp_trans):
             untranslate=True
             trans_mode='others'
+
         try :
-            word_count_new=len(translate_responses[idx])
+            char_count_new=len(translate_responses[idx])
         except:
             return None
-        resized_mask,whether_erase,return_box=resize_mask_returnbox_suokuan(ori_image_path,boxes,word_count_old,word_count_new,trans_mode)
+  
+        resized_mask, whether_erase, return_box = resize_mask_returnbox_suokuan(ori_image_path,boxes,char_count_old,char_count_new,trans_mode)
         masked_image = cv2.bitwise_and(image, image, mask=mask)
         resized_masked_image=cv2.bitwise_and(image, image, mask=resized_mask)
+        
         if idx==0:
             masked_image = resize_image(masked_image, max_length=768) 
             resized_masked_image= resize_image(resized_masked_image, max_length=768)
@@ -285,15 +338,13 @@ def PPOCR_pipline(img_path):
                 cv2.imwrite(inpainted_image_path, image)
                 inpainted_image=image
         ori_image_path=inpainted_image_path
-        image=inpainted_image.clip(1, 255)
+        image=inpainted_image.clip(0, 255)
 
-
-
-if __name__ == '__main__':
-    folder_path=''
+def main(args: argparse.Namespace):
+    folder_path='/home/pepe/Documents/University year 4/Competing in machine translation/AnyTrans-extended/cs_2_all/cs2en'
     image_path_list=[]
-    ocr = PaddleOCR(lang="ch")
-    evaluate_ocr = PaddleOCR(lang="en")
+    ocr = PaddleOCR(lang=args.sourceLang)
+    evaluate_ocr = PaddleOCR(lang=args.targetLang)
     for filename in os.listdir(folder_path):
       
         if filename.endswith('.png') or filename.endswith('.jpg'):
@@ -301,9 +352,14 @@ if __name__ == '__main__':
             image_path = os.path.join(folder_path, filename)
             image_path_list.append(image_path)
     for i in range(250):
-        path=os.path.join(folder_path,f'ch_{i+1}.jpg')
+        path=os.path.join(folder_path,f'cs_{i+1}.png')
         if path in image_path_list:
             print(f"Processed image: {path}")
 
-            PPOCR_pipline(path)
+            PPOCR_pipline(path, ocr, evaluate_ocr, args.sourceLang, args.targetLang)
+
+if __name__ == '__main__':
+    main_args = parser.parse_args([] if "__file__" not in globals() else None)
+
+    main(main_args)
             
