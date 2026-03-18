@@ -22,7 +22,6 @@ def image_crop_new(boxes,image_path,idx):
     return save_image_path
 
 
-
 def image_crop(pil_imgae,boxes,image_path,idx):
     pil_image=cv2.imread(image_path)
     min_x = max(min([x for x, _ in boxes]),0)
@@ -48,6 +47,7 @@ def image_crop_google(boxes,image_path,idx):
     save_image_path= image_path[:-4]+f'{idx}crop.png'
     cv2.imwrite(save_image_path,patch_image)
     return save_image_path
+
 
 def save_images(img_list, folder):
     if not os.path.exists(folder):
@@ -91,74 +91,86 @@ def resize_image(img, max_length=768):
 
 def resize_image_boxes(img,boxes, max_length=768):
     height, width = img.shape[:2]
-    height_original,width_original=height,width
+    height_original, width_original = height, width
     max_dimension = max(height, width)
+
+    # resize the image if it exceeds the maximum size
     if max_dimension > max_length:
         scale_factor = max_length / max_dimension
         new_width = int(round(width * scale_factor))
         new_height = int(round(height * scale_factor))
         new_size = (new_width, new_height)
         img = cv2.resize(img, new_size)
+
+    # Force dimensions devisible by 64
     height, width = img.shape[:2]
     img = cv2.resize(img, (width-(width % 64), height-(height % 64)))
-    height_end,width_end=img.shape[:2]
-    height_scale=height_end/height_original
-    width_scale=width_end/width_original
+    height_end, width_end = img.shape[:2]
+    height_scale = height_end / height_original
+    width_scale = width_end / width_original
 
+    # resize all text boxes accordingly
     new_boxes=[]
     for box_coordinates in boxes:
-        box_coordinates=np.array(box_coordinates, dtype=np.int32)
+        box_coordinates = np.array(box_coordinates, dtype=np.int32)
         rect = cv2.minAreaRect(box_coordinates)
         center, size, angle = rect
-        if angle<45:
-            # 调整box
-            size_new=(size[0]*width_scale,size[1]*height_scale)    
-        else:
-            size_new=(size[0]*height_scale,size[1]*width_scale) 
 
-        # 调整中心点坐标
+        # scale the rectangle size
+        if angle < 45:
+            size_new = (size[0] * width_scale, size[1] * height_scale)    
+        else:
+            size_new = (size[0] * height_scale, size[1] * width_scale) 
+
+        # align the textbox with the resized image and convert back to 4 corner points
         new_center = (center[0] * width_scale, center[1] * height_scale)          
         new_rect = (new_center, size_new, angle)
         new_box_coordinates = (cv2.boxPoints(new_rect).tolist())
+
+        # sligtly expand the bounding box
         new_coords = []
         for i, coord in enumerate(new_box_coordinates):
-            if i in (0, 1):  # 对于检测框的左上角和左下角进行向下取整
+            if i in (0, 1):
                 new_coords.append([math.floor(x) for x in coord])
-            elif i in (2, 3):  # 对于检测框的右下角和右上角进行向上取整
+            elif i in (2, 3):
                 new_coords.append([math.ceil(x) for x in coord])
         new_boxes.append(new_coords)
 
     return img,new_boxes
 
 
-
-
-# 计算连续两点间的距离
 def distance(pt1, pt2):
     return np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
 
+
 def enlarge_box_bigger(box):
-    # 找到最小外接矩形
-    width=distance(box[0],box[1])
-    height=distance(box[2],box[3])  
-    delta_width=width*0.06
-    delta_height=height*0.06
-    # 计算矩形的中心、宽度、高度和旋转角
-    box=np.array(box, dtype=np.int32)
+    width = distance(box[0],box[1])
+    height = distance(box[2],box[3])  
+
+    delta_width = width * 0.06
+    delta_height = height * 0.06
+
+    # convert into a rectangle
+    box = np.array(box, dtype=np.int32)
     rect = cv2.minAreaRect(box)
     center, size, angle = rect
-    if angle<45:
-        size_new=(size[0]+delta_width,size[1]+delta_height)
+
+    # exapnd the rectangle
+    if angle < 45:
+        size_new = (size[0] + delta_width, size[1] + delta_height)
     else:
-        size_new=(size[0]+delta_height,size[1]+delta_width)
-    # 生成新的最小外接矩形的四个顶点
+        size_new = (size[0] + delta_height, size[1] + delta_width)
+
+    # reconstruct the new rectangle into a box
     new_rect = (center, size_new, angle)
     new_box = cv2.boxPoints(new_rect)
-    # # 获取图像大小
+
+    # # move the boxes within the image if cropping occurs
     # img_height,img_width = pil_image.shape[:2]
-    # # 确保放大后的box坐标不超出图像边界
+    #
     # new_box[:, 0] = np.clip(new_box[:, 0], 1, img_width-10)
     # new_box[:, 1] = np.clip(new_box[:, 1], 1, img_height-10)
+    
     return new_box
 
 
@@ -290,7 +302,7 @@ def resize_mask_returnbox(img_path,box_coordinates, word_count_old,word_count_ne
     mask = 255 - mask
     return mask,whether_erase,new_box
 
-def resize_mask_returnbox_suokuan(img_path,box_coordinates, word_count_old,word_count_new,mode):
+def resize_mask_returnbox_suokuan(img_path, box_coordinates, word_count_old, word_count_new, mode):
     pil_image=cv2.imread(img_path)
     # 获取图像大小
     height,width = pil_image.shape[:2]
@@ -304,7 +316,7 @@ def resize_mask_returnbox_suokuan(img_path,box_coordinates, word_count_old,word_
     rect = cv2.minAreaRect(box_coordinates)
     # 计算矩形的中心、宽度、高度和旋转角
     center, size, angle = rect
-    scale_factor=word_count_new/word_count_old
+    scale_factor = word_count_new / word_count_old
     if mode=='ch2en':
         scale_factor=scale_factor/2.9
 
@@ -347,7 +359,6 @@ def resize_mask_returnbox_suokuan(img_path,box_coordinates, word_count_old,word_
     cv2.drawContours(mask, [new_box], 0, (255), -1)
     mask = 255 - mask
     return mask,whether_erase,new_box
-
 
 
 def pad_mask_styletext(img_path,box_coordinates,edited_img_path):
