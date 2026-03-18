@@ -302,63 +302,34 @@ def resize_mask_returnbox(img_path,box_coordinates, word_count_old,word_count_ne
     mask = 255 - mask
     return mask,whether_erase,new_box
 
-def resize_mask_returnbox_suokuan(img_path, box_coordinates, word_count_old, word_count_new, mode):
+def resize_mask_returnbox(img_path, box_coordinates, char_count_old, char_count_new, min_scale = 0.7, max_scale = 1.4, erase_threshold = 0.25):
+    # Load image and text box
     pil_image=cv2.imread(img_path)
-    # 获取图像大小
     height,width = pil_image.shape[:2]
-    # 将坐标数据转换为float类型
     box_coordinates = np.array(box_coordinates, dtype=np.int32)
-    whether_erase=False
 
-    dis_kuan=np.linalg.norm(box_coordinates[1]-box_coordinates[0])
-    dis_gao=np.linalg.norm(box_coordinates[2]-box_coordinates[1])       
-    # 找到最小外接矩形
-    rect = cv2.minAreaRect(box_coordinates)
-    # 计算矩形的中心、宽度、高度和旋转角
-    center, size, angle = rect
-    scale_factor = word_count_new / word_count_old
-    if mode=='ch2en':
-        scale_factor=scale_factor/2.9
+    # Calculate scale factor and avoid division by zero
+    char_count_old = max(char_count_old, 1)
+    char_count_new = max(char_count_new, 1)
+    scale_factor = char_count_new / char_count_old
+    scale_factor = np.clip(scale_factor, min_scale, max_scale)
 
-    elif mode=='en2ch' or mode=='fr2ch':
-        scale_factor=scale_factor*1.8
-    elif mode=='en2jp':
-        scale_factor=scale_factor/1.2
-    else:
-        scale_factor=scale_factor
+    # Flag for erasing old text
+    erase = abs(scale_factor - 1.0) > erase_threshold
 
-    if scale_factor>=0.8 and scale_factor<=1.2:
-        scale_factor=1
-        size_new=(size[0],size[1])
-    if scale_factor<0.8 and mode=='ch2en':
-        scale_factor=1
-        size_new=(size[0],size[1])
-    if scale_factor<0.8 and mode!='ch2en':#尺度缩小用擦图
-        whether_erase=True
-        if angle<45:
-            # 根据单词数翻译前后的比例调整矩形的长度
-            size_new=(size[0]*scale_factor,size[1])    
-        else:
-            size_new=(size[0],size[1]*scale_factor)
+    center = box_coordinates.mean(axis=0)
+    new_box = center + (box_coordinates - center) * scale_factor
 
-    if scale_factor>1.2:#尺度过大则用缩宽
-        whether_erase=True
-        if angle<45:
-            # 根据单词数翻译前后的比例调整矩形的长度
-            size_new=(size[0],size[1]/scale_factor)    
-        else:
-            size_new=(size[0]/scale_factor,size[1])
+    new_box[:, 0] = np.clip(new_box[:, 0], 0, width - 1)
+    new_box[:, 1] = np.clip(new_box[:, 1], 0, height - 1) 
 
-    # 生成新的最小外接矩形的四个顶点
-    new_rect = (center, size_new, angle)
-    new_box = cv2.boxPoints(new_rect)
-    new_box = np.int0(new_box)
-    # 创建一个全黑的图像作为初始掩码
-    mask = np.zeros((height,width), dtype=np.uint8) 
-    # 在掩码上绘制新的多边形，使用白色填充
-    cv2.drawContours(mask, [new_box], 0, (255), -1)
+    new_box_int = new_box.astype(np.int32)
+    mask = np.zeros((height, width), dtype=np.uint8)
+
+    cv2.fillPoly(mask, [new_box_int], 255)
     mask = 255 - mask
-    return mask,whether_erase,new_box
+
+    return mask, erase, new_box
 
 
 def pad_mask_styletext(img_path,box_coordinates,edited_img_path):
