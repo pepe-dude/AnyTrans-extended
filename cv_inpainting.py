@@ -19,5 +19,4 @@ def InpaintImage(imagePath, dt_boxes):
     mask = create_mask(image, dt_boxes)
     inpaintedImage = cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_NS)
 
-    erased_image_path=imagePath[:-4]+'_erase.png'
-    cv2.imwrite(erased_image_path, inpaintedImage)
+    cv2.imwrite(imagePath, inpaintedImage)
