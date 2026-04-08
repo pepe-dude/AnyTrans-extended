@@ -2,8 +2,112 @@ import datetime
 import os
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import math
+
+
+def get_box_dimentions(box):
+    height = np.linalg.norm(box[1] - box[0])
+    width = np.linalg.norm(box[2] - box[1])
+    
+    if height > width:
+        width, height = height, width
+
+    return width, height
+
+
+def reorder_box_points(box):
+    sum = box.sum(axis=1)
+    diff = np.diff(box, axis=1)
+
+    top_left = box[np.argmin(sum)]
+    bottom_right = box[np.argmax(sum)]
+    top_right = box[np.argmin(diff)]
+    bottom_left = box[np.argmax(diff)]
+
+    return np.array([top_left, top_right, bottom_right, bottom_left])
+
+
+def normalize_box(box):
+    box = reorder_box_points(box)
+
+    width = np.linalg.norm(box[1] - box[0])
+    height = np.linalg.norm(box[3] - box[0])
+
+    if height > width:
+        box = np.array([box[1], box[2], box[3], box[0]])
+
+    return box
+
+
+def get_box_angle(box):
+    box = normalize_box(box)
+
+    dx = box[1][0] - box[0][0]
+    dy = box[1][1] - box[0][1]
+
+    angle = np.degrees(np.arctan2(dy, dx))
+
+    return angle
+
+
+def get_text_size(text, font):
+    dummy_img = Image.new("RGB", (1, 1))
+    draw = ImageDraw.Draw(dummy_img)
+
+    return draw.textbbox((0, 0), text, font = font)[2:]
+
+
+def find_optimal_font_size(text, box_width, box_height, font_path):
+    min_size = 5
+    max_size = 200
+    best_size = min_size
+
+    while min_size <= max_size:
+        mid = (min_size + max_size) // 2
+        font = ImageFont.truetype(font_path, mid)
+
+        text_w, text_h = get_text_size(text, font)
+
+        if text_w <= box_width and text_h <= box_height:
+            best_size = mid
+            min_size = mid + 1
+        else:
+            max_size = mid - 1
+
+    return best_size
+
+
+def create_text_image(text, font_path, font_size, color=(0,0,0)):
+    font = ImageFont.truetype(font_path, font_size)
+
+    # Estimate size
+    dummy = Image.new("RGBA", (1, 1))
+    draw = ImageDraw.Draw(dummy)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    # Create transparent image with padding
+    img = Image.new("RGBA", (w + 20, h + 20), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.text((10, 10), text, font=font, fill=color)
+
+    return img
+
+
+def paste_rotated_text(base_image, text_img, center):
+    base = Image.fromarray(base_image).convert("RGBA")
+
+    text_w, text_h = text_img.size
+
+    # top-left position
+    x = int(center[0] - text_w / 2)
+    y = int(center[1] - text_h / 2)
+
+    base.paste(text_img, (x, y), text_img)
+
+    return np.array(base.convert("RGB"))
 
 
 def image_crop(pil_imgae,boxes,image_path,idx):
