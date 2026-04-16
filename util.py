@@ -1,5 +1,3 @@
-import datetime
-import os
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -229,3 +227,24 @@ def resize_mask_returnbox(img_path, box_coordinates, char_count_old, char_count_
     mask = 255 - mask
 
     return mask, new_box
+
+
+def create_mask(pil_image, boxes):
+    height,width  = pil_image.shape[:2]
+    image_size = (height,width )
+    mask = np.zeros(image_size, dtype=np.uint8)
+
+    
+    boxes = np.array(boxes, dtype=np.int32)
+    cv2.fillPoly(mask, [np.array(boxes, np.int32)], 255)
+
+    return mask
+
+
+def inpaint_image(imagePath, dt_boxes):
+    image = cv2.imread(imagePath)
+
+    mask = create_mask(image, dt_boxes)
+    inpaintedImage = cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_NS)
+
+    cv2.imwrite(imagePath, inpaintedImage)
