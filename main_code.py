@@ -1,6 +1,6 @@
 import numpy as np
 
-from util import enlarge_box_bigger, image_crop, resize_mask_returnbox, resize_image_boxes, get_box_angle, get_box_dimentions, find_optimal_font_size, create_text_image, paste_rotated_text
+from util import *
 
 import os
 import re
@@ -8,11 +8,10 @@ import random
 
 from modelscope.pipelines import pipeline
 from paddleocr import PaddleOCR
-from cv_inpainting import InpaintImage
 import argparse
 import cv2
 from difflib import SequenceMatcher
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from openai import OpenAI, APIStatusError
 
 from typing import List
@@ -144,6 +143,63 @@ def translaor_using_piple(input_txt, trans_mode):
     return True,responses_all 
 
 
+def render_text_generative(pipe, input_data, response, return_box, evaluate_ocr, idx, max_attempts=5):
+    '''
+        Use the AnyText pipeline to edit the image by inserting the translated text in place of the original
+        by making several attempts - each time checking if the text in the resulting image matches the one 
+        returned in the translation step using OCR on that resulting image.
+    '''
+    
+    image = None
+    detected_text = ""
+    response = response.strip()
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            input_data["seed"] = random.randint(1, 10_000_000)
+
+        results, rtn_code, _, _ = pipe(input_data, mode="text-editing", **pipe_params)
+
+        if rtn_code < 0:
+            continue
+
+        image = cv2.cvtColor(results[0], cv2.COLOR_RGB2BGR)
+
+        crop_image_path = image_crop(image, return_box, None, idx)
+        crop_result = evaluate_ocr.ocr(crop_image_path)
+
+        if crop_result[0] == None:
+            detected_text = ""
+
+        else:
+            detected_text = " ".join([line[1][0] for line in crop_result])
+        
+        # Compare the resulting text from the new image with the translation and if most of it matches return the result
+        if SequenceMatcher(None, detected_text, response).ratio() > 0.85:
+            return image, detected_text
+    
+    return image, detected_text
+
+
+def render_text_deterministic(image, box, text):
+    '''Deterministically render the translated text into the image by using PIL to draw it.'''
+    font_path = "DejaVuSans.ttf"
+
+    box = np.array(box)
+
+    angle = get_box_angle(box)
+    centre = box[:,0].mean(), box[:,1].mean()
+    box_width, box_height = get_box_dimentions(box)
+    font_size = find_optimal_font_size(text, box_width, box_height, font_path)
+
+    text_img = create_text_image(text, font_path, font_size)
+
+    rotated_text = text_img.rotate(-angle, expand=True, resample=Image.BICUBIC)
+
+    result = paste_rotated_text(image, rotated_text, centre)
+
+    return result
+
+
 def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang, rendering, log):
     trans_mode = f'{sourceLang}2{targetLang}'
 
@@ -186,7 +242,6 @@ def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang, rendering
             log_file.write(str(translate_responses) + "\t")        
         
         return None
-    
 
     image = np.array(pil_image)
     image = image.clip(0, 255) 
@@ -197,64 +252,6 @@ def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang, rendering
         log_file = open(translation_log, "w", encoding="utf-8")
         evaluate_log = img_path[:-4] + "evaluate_log.txt"
         evaluate_log_file = open(evaluate_log, "w", encoding="utf-8")
-
-
-    def render_text_generative(pipe, input_data, response, return_box, idx, max_attempts=5):
-        '''
-            Use the AnyText pipeline to edit the image by inserting the translated text in place of the original
-            by making several attempts - each time checking if the text in the resulting image matches the one 
-            returned in the translation step using OCR on that resulting image.
-        '''
-        
-        image = None
-        detected_text = ""
-        response = response.strip()
-        for attempt in range(max_attempts):
-            if attempt > 0:
-                input_data["seed"] = random.randint(1, 10_000_000)
-
-            results, rtn_code, _, _ = pipe(input_data, mode="text-editing", **pipe_params)
-
-            if rtn_code < 0:
-                continue
-
-            image = cv2.cvtColor(results[0], cv2.COLOR_RGB2BGR)
-
-            crop_image_path = image_crop(image, return_box, None, idx)
-            crop_result = evaluate_ocr.ocr(crop_image_path)
-
-            if crop_result[0] == None:
-                detected_text = ""
-
-            else:
-                detected_text = " ".join([line[1][0] for line in crop_result])
-            
-            # Compare the resulting text from the new image with the translation and if most of it matches return the result
-            if SequenceMatcher(None, detected_text, response).ratio() > 0.85:
-                return image, detected_text
-        
-        return image, detected_text
-    
-
-    def render_text_deterministic(image, box, text):
-        '''Deterministically render the translated text into the image by using PIL to draw it.'''
-        font_path = "DejaVuSans.ttf"
-
-        box = np.array(box)
-
-        angle = get_box_angle(box)
-        centre = box[:,0].mean(), box[:,1].mean()
-        box_width, box_height = get_box_dimentions(box)
-        font_size = find_optimal_font_size(text, box_width, box_height, font_path)
-
-        text_img = create_text_image(text, font_path, font_size)
-
-        rotated_text = text_img.rotate(-angle, expand=True, resample=Image.BICUBIC)
-
-        result = paste_rotated_text(image, rotated_text, centre)
-
-        return result
-
 
     # Proceed to editing of each text box
     for idx in range(len(new_dt_boxes)):
@@ -284,7 +281,7 @@ def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang, rendering
 
         # If the orignal text has been marked for inpainting and it is translatable (does not contain only symbols, numbers or codes)
         if untranslate == False:
-            InpaintImage(ori_image_path, boxes)
+            inpaint_image(ori_image_path, boxes)
 
         txts = all_text_ocr[idx]
 
@@ -319,7 +316,7 @@ def PPOCR_pipline(img_path, ocr, evaluate_ocr, sourceLang, targetLang, rendering
                     "ori_image":ori_image_path,
                 }
                 
-                edited_image, detected_text = render_text_generative(pipe, input_data, response, return_box, idx)                
+                edited_image, detected_text = render_text_generative(pipe, input_data, response, return_box, evaluate_ocr, idx)                
 
                 if log:
                     evaluate_log_file.write(f"{txts}\t{response}\t{detected_text}\n")
@@ -345,7 +342,7 @@ def main(args: argparse.Namespace):
             image_path = os.path.join(folder_path, filename)
             image_path_list.append(image_path)
 
-    for i in range(10):
+    for i in range(1):
         path = os.path.join(folder_path,f'cs_{i+1}.png')
         if path in image_path_list:
             print(f"Processed image: {path}")
@@ -360,6 +357,3 @@ if __name__ == '__main__':
         pipe = pipeline('my-anytext-task', model='damo/cv_anytext_text_generation_editing', model_revision='v1.1.2')
 
     main(main_args)
-
-# TODO: move util functions to the dedicated util.py file
-# TODO: possibly wrap some of the pipeline code into seperate functions
