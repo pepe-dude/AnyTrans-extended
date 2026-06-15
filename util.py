@@ -1,3 +1,5 @@
+import os
+import datetime
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -108,22 +110,64 @@ def paste_rotated_text(base_image, text_img, center):
     return np.array(base.convert("RGB"))
 
 
-def image_crop(pil_imgae,boxes,image_path,idx):
+def image_crop(boxes, image_path, idx):
     pil_image=cv2.imread(image_path)
-    min_x = max(min([x for x, _ in boxes]),0)
-    max_x = max([x for x, _ in boxes])
-    min_y = max(min([y for _, y in boxes]),0)
-    max_y = max([y for _, y in boxes])
+
+    min_x = int(max(min([x for x, _ in boxes]),0))
+    max_x = int(max([x for x, _ in boxes]))
+
+    min_y = int(max(min([y for _, y in boxes]),0))
+    max_y = int(max([y for _, y in boxes]))
+
     patch_image = pil_image[min_y:max_y, min_x:max_x]
-    if image_path[-10:-4]=='reedit':
-        save_image_path= image_path[:-11]+f'{idx}crop.png'
-    else:
-        save_image_path= image_path[:-4]+f'{idx}crop.png'
+
+    save_image_path= image_path[:-4]+f'{idx}crop.png'
+        
     cv2.imwrite(save_image_path,patch_image)
     return save_image_path
 
 
-def resize_image_boxes(img,boxes, max_length=768):
+def save_images(img_list, folder):
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    now = datetime.datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    folder_path = os.path.join(folder, date_str)
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    time_str = now.strftime("%H_%M_%S")
+    for idx, img in enumerate(img_list):
+        image_number = idx + 1
+        filename = f"{time_str}_{image_number}.jpg"
+        save_path = os.path.join(folder_path, filename)
+        cv2.imwrite(save_path, img[..., ::-1])
+
+
+def check_channels(image):
+    channels = image.shape[2] if len(image.shape) == 3 else 1
+    if channels == 1:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif channels > 3:
+        image = image[:, :, :3]
+    return image
+
+
+def resize_image(img, max_length=768):
+    height, width = img.shape[:2]
+    max_dimension = max(height, width)
+
+    if max_dimension > max_length:
+        scale_factor = max_length / max_dimension
+        new_width = int(round(width * scale_factor))
+        new_height = int(round(height * scale_factor))
+        new_size = (new_width, new_height)
+        img = cv2.resize(img, new_size)
+    height, width = img.shape[:2]
+    img = cv2.resize(img, (width-(width % 64), height-(height % 64)))
+    return img
+
+
+def resize_image_boxes(img, boxes, max_length=768):
     height, width = img.shape[:2]
     height_original, width_original = height, width
     max_dimension = max(height, width)
@@ -202,6 +246,43 @@ def enlarge_box_bigger(box):
     return new_box
 
 
+def get_contextual_crop(image, box, padding_ratio=1.5):
+    """
+    Extracts a region around the box with some padding for context.
+    Returns the cropped image, the bounding box of the crop in the original image,
+    and the box coordinates relative to the crop.
+    """
+    h, w = image.shape[:2]
+    
+    # Get box bounds
+    min_x = np.min(box[:, 0])
+    max_x = np.max(box[:, 0])
+    min_y = np.min(box[:, 1])
+    max_y = np.max(box[:, 1])
+    
+    box_w = max_x - min_x
+    box_h = max_y - min_y
+    
+    # Calculate padding
+    pad_w = box_w * padding_ratio
+    pad_h = box_h * padding_ratio
+    
+    # Define crop region
+    crop_x1 = int(max(0, min_x - pad_w))
+    crop_y1 = int(max(0, min_y - pad_h))
+    crop_x2 = int(min(w, max_x + pad_w))
+    crop_y2 = int(min(h, max_y + pad_h))
+    
+    crop_img = image[crop_y1:crop_y2, crop_x1:crop_x2]
+    
+    # Adjust box coordinates to be relative to the crop
+    relative_box = box.copy().astype(np.float32)
+    relative_box[:, 0] -= crop_x1
+    relative_box[:, 1] -= crop_y1
+    
+    return crop_img, (crop_x1, crop_y1, crop_x2, crop_y2), relative_box
+
+
 def resize_mask_returnbox(img_path, box_coordinates, char_count_old, char_count_new, min_scale = 0.7, max_scale = 1.4):
     # Load image and text box
     pil_image=cv2.imread(img_path)
@@ -231,10 +312,8 @@ def resize_mask_returnbox(img_path, box_coordinates, char_count_old, char_count_
 
 def create_mask(pil_image, boxes):
     height,width  = pil_image.shape[:2]
-    image_size = (height,width )
-    mask = np.zeros(image_size, dtype=np.uint8)
+    mask = np.zeros((height, width), dtype=np.uint8)
 
-    
     boxes = np.array(boxes, dtype=np.int32)
     cv2.fillPoly(mask, [np.array(boxes, np.int32)], 255)
 
@@ -245,6 +324,6 @@ def inpaint_image(imagePath, dt_boxes):
     image = cv2.imread(imagePath)
 
     mask = create_mask(image, dt_boxes)
-    inpaintedImage = cv2.inpaint(image, mask, inpaintRadius=5, flags=cv2.INPAINT_NS)
+    inpaintedImage = cv2.inpaint(image, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
     cv2.imwrite(imagePath, inpaintedImage)
